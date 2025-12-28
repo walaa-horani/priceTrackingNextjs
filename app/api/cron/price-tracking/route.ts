@@ -35,43 +35,65 @@ export async function POST(request: NextRequest) {
             alertsSent: 0,
         };
 
+        // Helper to ensure image URLs are absolute
+        const getAbsoluteUrl = (url?: string, baseUrl?: string) => {
+            if (!url) return undefined;
+            if (url.startsWith('http')) return url;
+            if (url.startsWith('//')) return `https:${url}`;
+            if (baseUrl) {
+                try {
+                    const base = new URL(baseUrl).origin;
+                    return new URL(url, base).toString();
+                } catch (e) {
+                    return url;
+                }
+            }
+            return url;
+        };
+
         for (const product of products) {
             try {
-                console.log(`Processing product: ${product.name} (${product.id})`);
+                console.log(`[CRON] Starting product: ${product.name} (${product.id})`);
+
                 const productData = await scrape(product.url);
 
                 if (!productData || !productData.currentPrice) {
-                    console.warn(`Failed to scrape or missing price for product: ${product.id}`);
+                    console.warn(`[CRON] Failed to scrape or missing price for: ${product.id}`);
                     results.failed++;
                     continue;
                 }
 
                 const newPrice = productData.currentPrice;
                 const oldPrice = product.current_price;
+                const absoluteImageUrl = getAbsoluteUrl(productData.imageURL || product.image_url, product.url);
 
-                console.log(`Price check for ${product.name}: Old=${oldPrice}, New=${newPrice}`);
+                console.log(`[CRON] ${product.name}: Old=${oldPrice}, New=${newPrice}`);
+                console.log(`[DEBUG: IMAGE URL] ${absoluteImageUrl}`);
 
+                // Update product table with latest data
                 const { error: updateError } = await supabase
                     .from("product")
                     .update({
                         current_price: newPrice,
                         currency: productData.currency || product.currency,
                         name: productData.productName || product.name,
-                        image_url: productData.imageURL || product.image_url,
+                        image_url: absoluteImageUrl,
                         updated_at: new Date().toISOString(),
                     })
                     .eq("id", product.id);
 
                 if (updateError) {
-                    console.error(`Error updating product ${product.id}:`, updateError);
+                    console.error(`[CRON] Update error for ${product.id}:`, updateError);
                     results.failed++;
                     continue;
                 }
 
                 results.updated++;
 
+                // Track price history and send alerts
                 if (oldPrice !== newPrice) {
-                    console.log(`[ALERT] Price change detected for ${product.id}. Old: ${oldPrice}, New: ${newPrice}`);
+                    console.log(`[CHANGE] Price change for ${product.id} (${oldPrice} -> ${newPrice})`);
+
                     await supabase.from("price_history").insert({
                         product_id: product.id,
                         price: newPrice,
@@ -81,40 +103,45 @@ export async function POST(request: NextRequest) {
                     results.priceChanges++;
 
                     if (newPrice < oldPrice) {
-                        console.log(`[ALERT] Price DROP! Fetching user ${product.user_id}`);
+                        console.log(`[DROP] Price drop! Fetching user ${product.user_id}`);
+
                         const { data: userData, error: userError } = await supabase.auth.admin.getUserById(
                             product.user_id
                         );
 
                         if (userError) {
-                            console.error(`[ALERT] Error fetching user ${product.user_id}:`, userError);
+                            console.error(`[EMAIL] Auth error for ${product.user_id}:`, userError);
                         }
 
                         const user = userData?.user;
 
                         if (user?.email) {
-                            console.log(`[ALERT] Sending email to ${user.email}`);
+                            console.log(`[EMAIL] Sending alert to ${user.email}`);
+
                             const emailResult = await sendEmail(
                                 user.email,
-                                product,
+                                {
+                                    ...product,
+                                    name: productData.productName || product.name,
+                                    image_url: absoluteImageUrl,
+                                },
                                 oldPrice,
                                 newPrice
                             );
+
                             if (emailResult.success) {
-                                console.log(`[ALERT] Email sent successfully to ${user.email}`);
+                                console.log(`[EMAIL] Sent successfully to ${user.email}`);
                                 results.alertsSent++;
                             } else {
-                                console.error(`[ALERT] Email failed for ${user.email}:`, emailResult.error);
+                                console.error(`[EMAIL] Failed for ${user.email}:`, emailResult.error);
                             }
                         } else {
-                            console.warn(`[ALERT] No email found for user ${product.user_id}. User data:`, !!userData);
+                            console.warn(`[EMAIL] No email found for user ${product.user_id}`);
                         }
-                    } else {
-                        console.log(`[ALERT] Price increased or stayed same. No email needed.`);
                     }
                 }
-            } catch (error) {
-                console.error(`Error processing product ${product.id}:`, error);
+            } catch (error: any) {
+                console.error(`[CRON] Unexpected error for product ${product.id}:`, error.message);
                 results.failed++;
             }
         }
