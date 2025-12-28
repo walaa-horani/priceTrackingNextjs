@@ -71,6 +71,7 @@ export async function POST(request: NextRequest) {
                 results.updated++;
 
                 if (oldPrice !== newPrice) {
+                    console.log(`[ALERT] Price change detected for ${product.id}. Old: ${oldPrice}, New: ${newPrice}`);
                     await supabase.from("price_history").insert({
                         product_id: product.id,
                         price: newPrice,
@@ -80,11 +81,19 @@ export async function POST(request: NextRequest) {
                     results.priceChanges++;
 
                     if (newPrice < oldPrice) {
-                        const { data: { user } } = await supabase.auth.admin.getUserById(
+                        console.log(`[ALERT] Price DROP! Fetching user ${product.user_id}`);
+                        const { data: userData, error: userError } = await supabase.auth.admin.getUserById(
                             product.user_id
                         );
 
+                        if (userError) {
+                            console.error(`[ALERT] Error fetching user ${product.user_id}:`, userError);
+                        }
+
+                        const user = userData?.user;
+
                         if (user?.email) {
+                            console.log(`[ALERT] Sending email to ${user.email}`);
                             const emailResult = await sendEmail(
                                 user.email,
                                 product,
@@ -92,9 +101,16 @@ export async function POST(request: NextRequest) {
                                 newPrice
                             );
                             if (emailResult.success) {
+                                console.log(`[ALERT] Email sent successfully to ${user.email}`);
                                 results.alertsSent++;
+                            } else {
+                                console.error(`[ALERT] Email failed for ${user.email}:`, emailResult.error);
                             }
+                        } else {
+                            console.warn(`[ALERT] No email found for user ${product.user_id}. User data:`, !!userData);
                         }
+                    } else {
+                        console.log(`[ALERT] Price increased or stayed same. No email needed.`);
                     }
                 }
             } catch (error) {
@@ -120,4 +136,4 @@ export async function POST(request: NextRequest) {
 // This is important! Export runtime config if needed
 export const runtime = 'nodejs'; // or 'edge'
 export const dynamic = 'force-dynamic';
-// curl.exe -X POST "https://price-tracking-nextjs.vercel.app/api/cron/price-tracking" -H "Authorization: Bearer 8ff30f27bd2d292eb91a610e2d794ff2fc7c8b0d4cd110ad91935e2675e91d3a"
+// curl.exe -X POST "http://localhost:3000/api/cron/price-tracking" -H "Authorization: Bearer 8ff30f27bd2d292eb91a610e2d794ff2fc7c8b0d4cd110ad91935e2675e91d3a"
