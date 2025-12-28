@@ -33,6 +33,7 @@ export async function POST(request: NextRequest) {
             failed: 0,
             priceChanges: 0,
             alertsSent: 0,
+            errors: [] as any[]
         };
 
         // Helper to ensure image URLs are absolute
@@ -58,8 +59,10 @@ export async function POST(request: NextRequest) {
                 const productData = await scrape(product.url);
 
                 if (!productData || !productData.currentPrice) {
-                    console.warn(`[CRON] Failed to scrape or missing price for: ${product.id}`);
+                    const msg = `Failed to scrape or missing price for: ${product.id}`;
+                    console.warn(`[CRON] ${msg}`);
                     results.failed++;
+                    results.errors.push({ id: product.id, error: msg });
                     continue;
                 }
 
@@ -85,6 +88,7 @@ export async function POST(request: NextRequest) {
                 if (updateError) {
                     console.error(`[CRON] Update error for ${product.id}:`, updateError);
                     results.failed++;
+                    results.errors.push({ id: product.id, error: `Update failed: ${updateError.message}` });
                     continue;
                 }
 
@@ -134,6 +138,7 @@ export async function POST(request: NextRequest) {
                                 results.alertsSent++;
                             } else {
                                 console.error(`[EMAIL] Failed for ${user.email}:`, emailResult.error);
+                                results.errors.push({ id: product.id, error: `Email failed: ${emailResult.error}` });
                             }
                         } else {
                             console.warn(`[EMAIL] No email found for user ${product.user_id}`);
@@ -141,8 +146,10 @@ export async function POST(request: NextRequest) {
                     }
                 }
             } catch (error: any) {
-                console.error(`[CRON] Unexpected error for product ${product.id}:`, error.message);
+                const errorMsg = error.message || "Unknown error";
+                console.error(`[CRON] Unexpected error for product ${product.id}:`, errorMsg);
                 results.failed++;
+                results.errors.push({ id: product.id, error: errorMsg });
             }
         }
 
@@ -163,4 +170,4 @@ export async function POST(request: NextRequest) {
 // This is important! Export runtime config if needed
 export const runtime = 'nodejs'; // or 'edge'
 export const dynamic = 'force-dynamic';
-// curl.exe -X POST "http://localhost:3000/api/cron/price-tracking" -H "Authorization: Bearer 8ff30f27bd2d292eb91a610e2d794ff2fc7c8b0d4cd110ad91935e2675e91d3a"
+// curl.exe -X POST "https://price-tracking-nextjs.vercel.app/api/cron/price-tracking" -H "Authorization: Bearer 8ff30f27bd2d292eb91a610e2d794ff2fc7c8b0d4cd110ad91935e2675e91d3a"
