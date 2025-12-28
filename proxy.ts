@@ -1,16 +1,18 @@
 import { NextRequest } from "next/server"
 import { updateSession } from "./lib/supabase/middleware"
 
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
     // update user's auth session
     return await updateSession(request)
 }
+
+export { proxy as middleware }
 
 export const config = {
     matcher: [
         /*
          * Match all request paths except for the ones starting with:
-         * - api (API routes)
+         * - api (API routes) <- ADD THIS
          * - _next/static (static files)
          * - _next/image (image optimization files)
          * - favicon.ico (favicon file)
